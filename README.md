@@ -6,6 +6,8 @@ Note: 128M SDRAM module is needed for the X16 core.
 The published `.rbf` contains **no ROM** — the X16 ROM is not ours to
 redistribute — so you must supply your own `boot1.rom` at runtime.
 
+Get a 256 KB X16 ROM (all 16 banks) — build it from X16Community/x16-rom, or use the rom.bin / *.BIN from a Commander X16 / emulator release.
+
 This core was coded by Claude Opus 4.8 and Claude Fable 5 My participation was
 testing, debugging, thinking, analysing... but not coding.
 
