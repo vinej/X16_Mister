@@ -115,8 +115,9 @@ module emu
     // HPS_IO  --  minimal config; full integration in Phase e/g
     // ========================================================================
     localparam CONF_STR = {
-        "X16;;",
-        "-;",
+        // MiSTer parses UART settings from config-string item 1, i.e. the
+        // second semicolon-delimited field immediately after the core name.
+        "X16;UART2400:4800:9600:19200:38400:57600:115200;-;",
         // jyv 2026-07-07: "SC" (not plain "S") -- Main only remembers and
         // AUTO-REMOUNTS SC entries at core start (user_io.cpp checks 'S','C').
         "SC0,IMG,Mount SD;",      // X16 guest SD = a FAT32 image file on the boot SD
@@ -525,6 +526,13 @@ module emu
     wire ym_cs     = dec_valid & (cpu_a[15:4]  == 12'h9F4);          // $9F40-$9F4F
     wire via1_cs   = dec_valid & (cpu_a[15:4]  == 12'h9F0);          // $9F00-$9F0F
     wire via2_cs   = dec_valid & (cpu_a[15:4]  == 12'h9F1);          // $9F10-$9F1F
+    // TexElec's dual-UART serial/network card defaults to IO7-Low and exposes
+    // two 8-byte UART windows at $9FE0 and $9FE8. MiSTer only gives us one
+    // host UART, so alias both windows onto the same underlying UART block for
+    // ROMTERM compatibility.
+    wire serial0_cs = dec_valid &
+                      ((cpu_a[15:3] == 13'h13FC) ||                 // $9FE0-$9FE7
+                       (cpu_a[15:3] == 13'h13FD));                  // $9FE8-$9FEF
     wire hi_ram_cs = dec_valid & (cpu_a[15:13] == 3'b101);           // $A000-$BFFF
     wire lowram_cs = dec_valid & ~(cpu_a[15:14] == 2'b11)
                    & ~(cpu_a[15:8] == 8'h9F) & ~(cpu_a[15:13] == 3'b101); // $0000-$9EFF
@@ -1250,7 +1258,10 @@ module emu
     );
 
     // ========================================================================
-    // VIA #2 (user port -- floating; only its bus interface is real)
+    // VIA #2 (user port)
+    //
+    // Leave the user-port pins floating/pulled-up like the stock machine.
+    // Serial-card emulation below owns the MiSTer host UART at $9FE0.
     // ========================================================================
     wire [7:0] via2_data;
     wire [7:0] via2_pa_in, via2_pa_out, via2_pa_oe;
@@ -1274,7 +1285,7 @@ module emu
         .pb_in   (via2_pb_in),
         .pb_out  (via2_pb_out),
         .pb_oe   (via2_pb_oe),
-        .ca1_in  (1'b0),
+        .ca1_in  (UART_RXD),
         .ca2_in  (1'b0),
         .cb1_in  (1'b0),
         .cb2_in  (1'b0),
@@ -1282,6 +1293,36 @@ module emu
         .cb1_out (), .cb1_oe (),
         .cb2_out (), .cb2_oe (),
         .irq_n   (via2_irq_n)
+    );
+
+    // ========================================================================
+    // Serial/network card emulation at $9FE0-$9FEF
+    //
+    // ROMTERM expects the X16 serial/network card default at IO7-Low with
+    // valid UARTs at both $9FE0 and $9FE8. Alias both onto the same MiSTer
+    // host UART so the modem/TCP bridge is reachable regardless of which
+    // detected port ROMTERM selects.
+    // ========================================================================
+    wire [7:0] serial0_data;
+
+    x16_serial_card #(
+        .CLK_HZ         (8_000_000),
+        .DEFAULT_DIVISOR(16'd8)
+    ) u_serial0 (
+        .clk      (cpu_clk),
+        .reset_n  (cpu_reset_n),
+        .cs       (serial0_cs),
+        .rwn      (cpu_rwn),
+        .enable   (cpu_rdy),
+        .addr     (cpu_a[2:0]),
+        .di       (cpu_do),
+        .do_o     (serial0_data),
+        .uart_rxd (UART_RXD),
+        .uart_cts (UART_CTS),
+        .uart_dsr (UART_DSR),
+        .uart_txd (UART_TXD),
+        .uart_rts (UART_RTS),
+        .uart_dtr (UART_DTR)
     );
 
     // ========================================================================
@@ -1374,6 +1415,7 @@ module emu
                     ym_cs     ? ym_rd_data   :
                     via1_cs   ? via1_data    :
                     via2_cs   ? via2_data    :
+                    serial0_cs ? serial0_data :
                     lowram_cs ? lowram_data  :
                                 open_bus_r;   // unmapped: floating bus
 
@@ -1469,10 +1511,6 @@ module emu
 
     // SDRAM driven by ext_ram_sdram (HiRAM) -- see u_hiram above.
 
-    // UART / USER port (unused)
-    assign UART_RTS = 1'b0;
-    assign UART_TXD = 1'b1;
-    assign UART_DTR = 1'b0;
     assign USER_OUT = 7'h7F;
 
     // ADC (unused)

@@ -17,6 +17,7 @@ set_global_assignment -name SDC_FILE x16.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/rom_banks.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/lowram_bram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/via65c22.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/x16_serial_card.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/smc_x16.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ps2_to_smc_bridge.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ext_ram_sdram.sv
