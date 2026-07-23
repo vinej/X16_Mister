@@ -21,6 +21,18 @@ keep working exactly as before.
 > uses it runs only on this core (or an emulator that copies the register spec).
 > Always feature‑detect via the **ID register** and fall back gracefully.
 
+> 🚨 **Breaking change in this revision — `$9F64` (ADDR_H) is now
+> `{incr[3:0], ptr[19:16]}`.** The upper nibble used to be ignored; it now
+> selects the `DATA` **auto‑increment stride** ([§3.1](#31-auto-increment-stride-addr_h74)).
+> Any program that wrote a non‑zero value into `$9F64[7:4]` — for example
+> storing a full 24‑bit offset's bank byte without masking it to 4 bits — will
+> now walk the pointer with the wrong stride instead of `+1`. **Mask ADDR_H
+> writes to `$0F`** (or set the stride you want deliberately). The layer is new
+> and experimental, so this revision does **not** keep the old behaviour
+> compatible. The bitstream, the `-bitmap2` emulator and the `demo/` `.PRG`s
+> must all be from this revision or later — mixing revisions gives wrong
+> strides, not a clean failure.
+
 ---
 
 ## 1. Turning it on
@@ -44,10 +56,10 @@ raster.
 |------|------|-----|-------------|
 | `$9F60` | **CTRL** | R/W | `bit0` = enable, `bit2:1` = mode, `bit3` = passthru (VERA sprites/opaque pixels show **over** the bitmap — keeps the hardware mouse cursor visible). Write `(passthru<<3)\|(mode<<1)\|enable`. Read = `{4'b0, passthru, mode, enable}`. |
 | `$9F61` | **ID** | R | Fixed **`$B5`** — feature‑detect signature. |
-| `$9F62` | **ADDR_L** | W | Framebuffer pointer, bits `[7:0]` (shared by reads and writes). |
-| `$9F63` | **ADDR_M** | W | Pointer bits `[15:8]`. |
-| `$9F64` | **ADDR_H** | W | Pointer bits `[19:16]` (**20‑bit** linear byte pointer → 1 MB). |
-| `$9F65` | **DATA** | R/W | **Write:** store a byte at the pointer, then auto‑increment. **Read:** return the byte at the pointer, then auto‑increment (the read‑back that lets a GUI *save under* a dialog). |
+| `$9F62` | **ADDR_L** | R/W | Framebuffer pointer, bits `[7:0]` (shared by reads and writes). Reads back the *current* pointer. |
+| `$9F63` | **ADDR_M** | R/W | Pointer bits `[15:8]`. |
+| `$9F64` | **ADDR_H** | R/W | `{incr[3:0], ptr[19:16]}` — pointer bits `[19:16]` (**20‑bit** linear byte pointer → 1 MB) **and** the auto‑increment **stride** select ([§3.1](#31-auto-increment-stride-addr_h74)). One store sets both. |
+| `$9F65` | **DATA** | R/W | **Write:** store a byte at the pointer, then advance it by the **stride**. **Read:** return the byte at the pointer, then advance (the read‑back that lets a GUI *save under* a dialog). |
 | `$9F66` | **PAL_IDX** | W | Set the palette write cursor (0–255). |
 | `$9F67` | **PAL_LO** | W | Low byte of a palette entry: `{G[3:0], B[3:0]}`. |
 | `$9F68` | **PAL_HI** | W | High byte `{----, R[3:0]}` → **commits** `{R,G,B}` to `PAL_IDX`, then cursor `++`. |
@@ -80,7 +92,9 @@ The blit is byte‑wise, so any source/destination alignment works. It runs **be
 
 - **Read‑back for save‑under.** Before drawing a transient element (dialog, drop‑down), set the pointer to the covered region and **read** it out through `$9F65` into RAM; on close, set the pointer back and **write** it. The `$9F65` read is coherent with prior writes (it drains the write path first). Reads via the debugger do **not** auto‑increment.
 - **Keep the mouse visible.** Set `CTRL bit3` (passthru). VERA's hardware sprites — including sprite‑0 (the KERNAL mouse pointer) — then composite **over** the bitmap, while the bitmap fills everywhere VERA is transparent. Disable VERA's layers so only the sprites show through. With passthru = 0 (default) the bitmap fully covers VERA.
-- **4bpp partial pixels** need read‑modify‑write (2 px/byte): read the byte, change one nibble, write it back. 8bpp needs no RMW (1 px/byte), so it's the simpler target for a toolkit.
+- **4bpp partial pixels** need read‑modify‑write (2 px/byte): read the byte, change one nibble, write it back. Set the stride to **`$1` (hold)** first and the read leaves the pointer *on* the byte, so the write‑back needs no pointer reload:
+  `lda #$10 : ora hi : sta $9F64` → `lda $9F65` → merge the nibble → `sta $9F65`.
+  8bpp needs no RMW (1 px/byte), so it's the simpler target for a toolkit.
 
 ### Mode field (`CTRL[2:1]`)
 
@@ -115,6 +129,64 @@ addresses beyond the 20‑bit pointer (1 MB).
 Because `DATA` auto‑increments, the fast path is to set the pointer once and
 **stream** bytes in row‑major order (top‑left to bottom‑right). Random‑access
 plotting just means computing the offset above and loading `ADDR_L/M/H` first.
+
+### 3.1 Auto-increment stride (`ADDR_H[7:4]`)
+
+`DATA` advances the pointer by a **selectable signed stride**, chosen by the
+upper nibble of `$9F64` — the same bit position as VERA's `ADDRx_H` increment
+field, so the idiom is the one you already know from VRAM. The difference: this
+table is **signed**, so both directions live in one field and there is no
+separate `DECR` bit to set.
+
+| `incr` | Stride | Typical use |
+|---|---|---|
+| `$0` | **+1** | linear streaming — **the default after reset** |
+| `$1` | **0** | *hold* the pointer: 4bpp read‑modify‑write, re‑read the same byte |
+| `$2` | +2 | every other pixel (dither, 2‑px patterns) |
+| `$3` | +4 | |
+| `$4` | +8 | |
+| `$5` | +16 | |
+| `$6` | +32 | |
+| `$7` | +64 | |
+| `$8` | +128 | |
+| `$9` | +256 | |
+| `$A` | **+320** | 4bpp row stride — one pixel **down** |
+| `$B` | **+640** | 8bpp row stride — one pixel **down** |
+| `$C` | −1 | reverse streaming, overlapping copies |
+| `$D` | −2 | |
+| `$E` | **−320** | 4bpp row stride — one pixel **up** |
+| `$F` | **−640** | 8bpp row stride — one pixel **up** |
+
+Because the nibble shares a register with `ptr[19:16]`, the stride costs
+**nothing** to set — the single `sta $9F64` you already do when loading the
+pointer carries it:
+
+```asm
+; vertical line at (x,y0) downwards, 8bpp: ONE store per pixel
+        lda off+0 : sta $9F62
+        lda off+1 : sta $9F63
+        lda off+2 : and #$0F : ora #$B0 : sta $9F64   ; ptr[19:16] + stride +640
+        ldx #height
+        lda #colour
+:       sta $9F65                          ; each write steps down one row
+        dex
+        bne :-
+```
+
+Without a stride that inner loop needs a 24‑bit `+640` and three pointer
+stores per pixel (~30 cycles); with it, a 4‑cycle `sta`. Note the `and #$0F`
+before the `ora`: `ADDR_H` only holds `ptr[19:16]`, so a 24‑bit offset's bank
+byte must be masked or it lands in the stride field. Mask it the same way when
+you *don't* want a stride — a bare `sta $9F64` of a bank byte is now a bug.
+
+The pointer is **readable** (`$9F62`–`$9F64`), so a loop can hand its end
+position to the next routine instead of recomputing it. It is 20 bits and
+**wraps modulo 1 MB**, so a negative stride from 0 lands at `$FFFFF`.
+
+Two things the stride does *not* speed up, so you know where not to reach for
+it: **row‑major fills** are already optimal at `+1`, and **rectangle** blits
+still need a per‑row pointer reload (there is no `640 − width` entry — use the
+[blit](#fast-save-under-with-the-blit) for bulk moves instead).
 
 ---
 
@@ -207,9 +279,12 @@ Plot a single 8bpp pixel at `(x,y)` = compute `off = y*640 + x`, then:
 ```asm
         lda off+0 : sta $9F62
         lda off+1 : sta $9F63
-        lda off+2 : sta $9F64      ; ADDR_H (bits 18:16)
-        lda color : sta $9F65      ; write the pixel
+        lda off+2 : and #$0F : sta $9F64   ; ADDR_H: ptr[19:16], stride = +1
+        lda color : sta $9F65              ; write the pixel
 ```
+
+The `and #$0F` matters: `$9F64[7:4]` is the [stride select](#31-auto-increment-stride-addr_h74),
+so an unmasked bank byte would set a stride you didn't ask for.
 
 ---
 
@@ -259,8 +334,14 @@ trick clears to a **solid** colour — just seed one pixel (`POKE $9F65,C` with
 - **Compositing.** Default: the bitmap fully replaces VERA. With `CTRL bit3`
   (passthru), VERA's opaque pixels (sprites — incl. the mouse — and layers)
   show over the bitmap; the bitmap fills where VERA is transparent.
-- **`DATA` is readable** (`$9F65` read → byte at the pointer, auto‑increment),
-  which is what makes GUI save‑under and 4bpp read‑modify‑write possible.
+- **`DATA` is readable** (`$9F65` read → byte at the pointer, then the stride is
+  applied), which is what makes GUI save‑under and 4bpp read‑modify‑write
+  possible. The **pointer** is readable too (`$9F62`–`$9F64`).
+- **The stride is free but narrow.** Setting it costs nothing (it rides the
+  `ADDR_H` store you already do) and turns column‑major drawing from ~30 cycles
+  per pixel into 4. It does **not** make fills or row blits faster — `+1` was
+  already optimal there — and there is no `stride − width` entry for
+  rectangles. See [§3.1](#31-auto-increment-stride-addr_h74).
 - **Frame coherency.** Pixel writes travel through the SDRAM write FIFO and land
   a few microseconds later — invisible for display (the next frame always shows
   the finished data), so no need to sync.
@@ -290,10 +371,14 @@ trick clears to a **solid** colour — just seed one pixel (`POKE $9F65,C` with
 ```
 $9F60 CTRL     W (passthru<<3)|(mode<<1)|enable   R {0,0,0,0,passthru,mode,enable}
 $9F61 ID       R $B5
-$9F62 ADDR_L   W ptr[7:0]
-$9F63 ADDR_M   W ptr[15:8]
-$9F64 ADDR_H   W ptr[19:16]   (20-bit, 1 MB)
-$9F65 DATA     W byte @ptr, ptr++   R byte @ptr, ptr++   (read-back for save-under)
+$9F62 ADDR_L  RW ptr[7:0]
+$9F63 ADDR_M  RW ptr[15:8]
+$9F64 ADDR_H  RW {incr[3:0], ptr[19:16]}   (20-bit ptr = 1 MB; MASK to $0F if
+                                            you don't mean to set a stride)
+$9F65 DATA     W byte @ptr, ptr+=stride   R byte @ptr, ptr+=stride  (save-under)
+
+incr:  0=+1(default)  1=0(hold)  2=+2  3=+4  4=+8  5=+16  6=+32  7=+64
+       8=+128  9=+256  A=+320  B=+640  C=-1  D=-2  E=-320  F=-640
 $9F66 PAL_IDX  W palette cursor
 $9F67 PAL_LO   W {G[3:0],B[3:0]}
 $9F68 PAL_HI   W {----,R[3:0]}  commit + cursor++
@@ -318,6 +403,7 @@ hardware.
 | File | What it shows |
 |---|---|
 | `vera2fill.s` / `VERA2FILL.PRG` | Switch to 8bpp, fill the whole screen fast with the **blit** (doubling a 16-colour seed), wait for a key, return to BASIC. The assembly form of the §7 BASIC example. |
+| `vera2incr.s` / `VERA2INCR.PRG` | The **auto-increment stride** ([§3.1](#31-auto-increment-stride-addr_h74)): 15 full-height vertical lines drawn with stride **+640** (one `sta` per pixel), and a rectangle outline drawn by *walking the perimeter* — the pointer is loaded **once** and each edge just changes the stride (`+1`, `+640`, `-1`, `-640`), reading `$9F64` back to preserve `ptr[19:16]`. Starts with a **self-test** that prints a warning if the machine predates the stride field. |
 | `vera2blit.s` / `VERA2BLIT.PRG` | The full picture: an 8bpp gradient, 16 random **VERA sprites** + the **mouse** floating over it (passthru), a green top bar = the **write/read-back** self-test, and **left-click save-under** — click the gradient to drop a message box (the covered band is blitted to scratch), click the box to restore it exactly. |
 
 **Build** (cc65):

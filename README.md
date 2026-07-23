@@ -24,6 +24,24 @@ drives the registers at `$9F60`–`$9F6F` (write pixels, load the palette, use t
 SDRAM→SDRAM blit for fast fills / save-under). With the layer **Off** the core
 behaves exactly as before.
 
+**New: a selectable auto-increment stride**, like VERA's VRAM port. `$9F65`
+(DATA) used to advance the pointer by exactly one byte; it now advances by a
+stride chosen with the upper nibble of `$9F64` — `+1` (the default), `0` for
+read-modify-write, `±320`/`±640` to step a whole row, and the powers of two in
+between. Setting it is free (it rides the `ADDR_H` store you already make), and
+it turns column-major drawing from ~30 cycles per pixel into 4. The pointer
+registers `$9F62`–`$9F64` are now readable too.
+
+> 🚨 **Breaking change — `$9F64` is now `{incr[3:0], ptr[19:16]}`.** Its upper
+> nibble used to be ignored and is now the stride select, so a program that
+> stored an unmasked 24-bit bank byte there will walk the pointer with the
+> wrong stride. **Mask `ADDR_H` writes to `$0F`.** The layer is new and
+> experimental, so this revision deliberately does *not* preserve the old
+> behaviour. Update the **bitstream, the `-bitmap2` emulator and the `demo/`
+> `.PRG`s together** — mixing revisions gives wrong strides rather than a clean
+> failure. `VERA2INCR.PRG` self-tests the field and tells you if a build is
+> stale.
+
 * **Documentation / register spec** — [vera_2.md](vera_2.md)
 * **Demos** — source (`.s`) + `.PRG` + a ready-to-mount SD image — [demo/](demo/)
 * **Emulator that supports v1.3** — a fork of the X16 emulator adding the same

@@ -11,12 +11,16 @@
 //                    [3]=passthru (VERA sprites/opaque pixels OVER the bitmap)
 //                 R: {4'b0, passthru, mode, enable}
 //   $9F61  ID     R: MAGIC_ID (feature-detect).  W: ignored
-//   $9F62  ADDRL  W: framebuffer byte pointer [7:0]  (also the BLIT SOURCE)
-//   $9F63  ADDRM  W: pointer [15:8]
-//   $9F64  ADDRH  W: pointer [19:16]  (20-bit -> 1 MB, so a full-screen 8bpp
-//                    save-under (307 KB image + 307 KB scratch = 600 KB) fits)
-//   $9F65  DATA   R/W: byte <-> SDRAM @ planar(pointer), pointer++ (read-back
-//                    is the GUI save-under path)
+//   $9F62  ADDRL  R/W: framebuffer byte pointer [7:0]  (also the BLIT SOURCE)
+//   $9F63  ADDRM  R/W: pointer [15:8]
+//   $9F64  ADDRH  R/W: {incr[3:0], pointer[19:16]}  (20-bit ptr -> 1 MB, so a
+//                    full-screen 8bpp save-under (307 KB image + 307 KB
+//                    scratch = 600 KB) fits).  incr = the DATA auto-increment
+//                    STRIDE select, same bit position as VERA's ADDRx_H[7:4]
+//                    but indexing a SIGNED table (see `step` below), so no
+//                    separate DECR bit is needed.
+//   $9F65  DATA   R/W: byte <-> SDRAM @ planar(pointer), pointer += stride
+//                    (read-back is the GUI save-under path)
 //   $9F66  PALADR W: palette index [7:0] (auto-increments after PALHI)
 //   $9F67  PALLO  W: {G[3:0], B[3:0]}  (latched)
 //   $9F68  PALHI  W: {----, R[3:0]} -> commits {R,G,B} to palette[idx]; idx++
@@ -76,8 +80,37 @@ module bitmap_regs #(
     reg  [1:0] mode_r;
     reg        passthru_r;
     reg [19:0] ptr;          // 20-bit byte pointer (1 MB; also the blit source)
+    reg  [3:0] incr_sel;     // $9F64[7:4]: DATA auto-increment stride select
     reg  [7:0] pal_lo;
     reg  [7:0] cur_idx;
+
+    // DATA auto-increment stride.  Like VERA's VRAM port, the stride is a 4-bit
+    // select in ADDRx_H[7:4] -- but the table here is SIGNED, so the two useful
+    // directions live in one field instead of needing VERA's extra DECR bit.
+    // Index 0 = +1 so a plain "set pointer, stream bytes" loop is the default.
+    reg signed [11:0] step;
+    always @(*) begin
+        case (incr_sel)
+            4'h0: step =  12'sd1;      // linear streaming (reset default)
+            4'h1: step =  12'sd0;      // hold: 4bpp read-modify-write, re-read
+            4'h2: step =  12'sd2;
+            4'h3: step =  12'sd4;
+            4'h4: step =  12'sd8;
+            4'h5: step =  12'sd16;
+            4'h6: step =  12'sd32;
+            4'h7: step =  12'sd64;
+            4'h8: step =  12'sd128;
+            4'h9: step =  12'sd256;
+            4'hA: step =  12'sd320;    // 4bpp row stride: one pixel down
+            4'hB: step =  12'sd640;    // 8bpp row stride: one pixel down
+            4'hC: step = -12'sd1;      // reverse streaming / overlapping copy
+            4'hD: step = -12'sd2;
+            4'hE: step = -12'sd320;    // 4bpp row stride: one pixel up
+            4'hF: step = -12'sd640;    // 8bpp row stride: one pixel up
+        endcase
+    end
+    // Sign-extended to the pointer width; wraps mod 1 MB like the pointer does.
+    wire [19:0] ptr_next = ptr + {{8{step[11]}}, step};
 
     // blit-busy tracking: pending is raised on a start write and cleared on the
     // done TOGGLE from the sdram domain (an edge is reliably caught, whereas a
@@ -98,6 +131,9 @@ module bitmap_regs #(
         case (addr)
             4'd0:    do_o = {4'b0, passthru_r, mode_r, enable_r};
             4'd1:    do_o = MAGIC_ID;
+            4'd2:    do_o = ptr[7:0];               // pointer readback: where a
+            4'd3:    do_o = ptr[15:8];              // streaming loop ended up
+            4'd4:    do_o = {incr_sel, ptr[19:16]};
             4'hF:    do_o = {7'b0, blit_pending};   // BCTRL read: busy
             default: do_o = 8'h00;
         endcase
@@ -106,7 +142,7 @@ module bitmap_regs #(
     always @(posedge clk or negedge reset_n) begin
         if (!reset_n) begin
             enable_r <= 1'b0; mode_r <= 2'd0; passthru_r <= 1'b0;
-            ptr <= 20'd0; pal_lo <= 8'h00;
+            ptr <= 20'd0; incr_sel <= 4'h0; pal_lo <= 8'h00;
             cur_idx <= 8'h00; pal_we <= 1'b0; pal_idx <= 8'h00; pal_data <= 12'h000;
             blit_start <= 1'b0; blit_dst <= 20'd0; blit_len <= 20'd0;
             done_s <= 2'b0; done_d <= 1'b0; blit_pending <= 1'b0;
@@ -121,8 +157,9 @@ module bitmap_regs #(
                                 passthru_r <= di[3]; end
                     4'd2: ptr[7:0]   <= di;
                     4'd3: ptr[15:8]  <= di;
-                    4'd4: ptr[19:16] <= di[3:0];
-                    4'd5: ptr        <= ptr + 20'd1;         // DATA write: advance
+                    4'd4: begin ptr[19:16] <= di[3:0];       // ADDRH + stride
+                                incr_sel   <= di[7:4]; end
+                    4'd5: ptr        <= ptr_next;            // DATA write: advance
                     4'd6: cur_idx    <= di;                  // PALADR: set cursor
                     4'd7: pal_lo     <= di;                  // PALLO: latch {G,B}
                     4'd8: begin                              // PALHI {R} -> commit
@@ -144,7 +181,7 @@ module bitmap_regs #(
                     default: ;
                 endcase
             end else if (cs && en && rwn && (addr == 4'd5)) begin
-                ptr <= ptr + 20'd1;                          // DATA read: advance
+                ptr <= ptr_next;                             // DATA read: advance
             end
         end
     end

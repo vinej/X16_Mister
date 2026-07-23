@@ -165,12 +165,15 @@ in_box:
     rts
 
 ; ---- blit helpers ----
+; ADDR_H ($9F64) is {incr[3:0], ptr[19:16]}: the upper nibble is the DATA
+; auto-increment stride select, so every bank byte stored there is masked to
+; $0F -- leaving stride 0 = +1, the linear default these routines want.
 save_under:                    ; band -> scratch
     lda #<BAND_OFF
     sta BMP_ADDRL
     lda #>BAND_OFF
     sta BMP_ADDRM
-    lda #^BAND_OFF
+    lda #(^BAND_OFF) & $0F
     sta BMP_ADDRH
     lda #<SCRATCH
     sta BLIT_DSTL
@@ -184,7 +187,7 @@ restore_under:                 ; scratch -> band
     sta BMP_ADDRL
     lda #>SCRATCH
     sta BMP_ADDRM
-    lda #^SCRATCH
+    lda #(^SCRATCH) & $0F
     sta BMP_ADDRH
     lda #<BAND_OFF
     sta BLIT_DSTL
@@ -223,6 +226,7 @@ draw_dialog:
     lda rp+1
     sta BMP_ADDRM
     lda rp+2
+    and #$0F                   ; keep the stride nibble clear -> +1
     sta BMP_ADDRH
     cpx #2
     bcc @border

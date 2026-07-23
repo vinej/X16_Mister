@@ -29,6 +29,9 @@ CHROUT = $FFD2
 GETIN  = $FFE4
 
 ; one doubling copy: bytes [0,len) -> [dst,dst+len)  (blit src = ADDR = 0)
+; NOTE: ADDR_H ($9F64) is {incr[3:0], ptr[19:16]} -- the upper nibble selects
+; the DATA auto-increment stride, so a bank byte stored there must be masked
+; to $0F.  Here the pointer is always 0, so a plain stz gives ptr 0 / stride +1.
 .macro BLITC dst, len
     lda #<(dst)
     sta BLIT_DSTL
