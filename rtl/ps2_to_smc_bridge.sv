@@ -203,8 +203,18 @@ module ps2_to_smc_bridge #(
                 S_EMIT: begin
                     uart_byte       <= seq_byte(idx[1:0]);
                     uart_byte_valid <= 1'b1;
-                    if (idx[1:0] == nbytes - 2'd1) state <= S_IDLE;
-                    idx <= idx + 3'd1;
+                    if (idx[1:0] == nbytes - 2'd1) begin
+                        if (ev_ext && (ev_code == 8'h77) && ev_pressed) begin
+                            // Pause key make complete: auto-emit break sequence (E0 F0 77)
+                            // because hps_io never sends a break event for Pause.
+                            ev_pressed <= 1'b0;
+                            idx        <= 3'd0;
+                        end else begin
+                            state      <= S_IDLE;
+                        end
+                    end else begin
+                        idx <= idx + 3'd1;
+                    end
                 end
 
                 S_MOUSE: begin

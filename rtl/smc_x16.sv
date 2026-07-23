@@ -306,6 +306,7 @@ module smc_x16 #(
             8'h5a: ps2ext_to_ibm = 8'd108;   // KP Enter
             8'h7c: ps2ext_to_ibm = 8'd124;   // KP PrtScr
             8'h15: ps2ext_to_ibm = 8'd126;   // Pause/Break
+            8'h77: ps2ext_to_ibm = 8'd126;   // Pause/Break (MiSTer ps2_key ext $77)
             default: ps2ext_to_ibm = 8'd0;
         endcase
     endfunction
@@ -353,7 +354,7 @@ module smc_x16 #(
                         if      (uart_byte == 8'h14) mod_rctrl <= 1'b1;
                         else if (uart_byte == 8'h11) mod_ralt  <= 1'b1;
                         else if (uart_byte == 8'h71 && ctrl_alt_down) kbd_reset_req <= 1'b1;
-                        else if (uart_byte == 8'h7C && ctrl_alt_down) kbd_nmi_req   <= 1'b1;
+                        else if ((uart_byte == 8'h7C || uart_byte == 8'h77) && ctrl_alt_down) kbd_nmi_req <= 1'b1;
                     end
                     U_EXT_BREAK_KEY: begin  // after E0 F0
                         if      (uart_byte == 8'h14) mod_rctrl <= 1'b0;
