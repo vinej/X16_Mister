@@ -40,6 +40,7 @@
 module via65c22 (
     input  logic        clk,
     input  logic        reset_n,
+    input  logic        ce,        // clock enable for 1x 8 MHz timer ticks
 
     // CPU bus
     input  logic        cs,        // parent says "this access is mine"
@@ -196,33 +197,35 @@ module via65c22 (
             t2_running_r <= 1'b0;
         end else begin
             // ---- Timer 1 ---------------------------------------------------
-            // Counts every cpu_clk.  When it reaches 0xFFFF after underflow,
-            // raise IFR[6].  Free-run (ACR[6]=1) reloads from latch; one-shot
-            // (ACR[6]=0) stops.
-            if (t1_cnt_r == 16'h0000) begin
-                if (t1_running_r) ifr_r[6] <= 1'b1;
-                if (acr_r[6]) begin
-                    // free-run: reload from latch
-                    t1_cnt_r <= {t1_lat_hi_r, t1_lat_lo_r};
+            // Counts every 8 MHz cycle (gated by ce).  When it reaches 0xFFFF
+            // after underflow, raise IFR[6].  Free-run (ACR[6]=1) reloads from
+            // latch; one-shot (ACR[6]=0) stops.
+            if (ce) begin
+                if (t1_cnt_r == 16'h0000) begin
+                    if (t1_running_r) ifr_r[6] <= 1'b1;
+                    if (acr_r[6]) begin
+                        // free-run: reload from latch
+                        t1_cnt_r <= {t1_lat_hi_r, t1_lat_lo_r};
+                    end else begin
+                        // one-shot: keep counting down (wraps to FFFF) but no
+                        // further IRQ until next manual reload.
+                        t1_running_r <= 1'b0;
+                        t1_cnt_r     <= 16'hFFFF;
+                    end
                 end else begin
-                    // one-shot: keep counting down (wraps to FFFF) but no
-                    // further IRQ until next manual reload.
-                    t1_running_r <= 1'b0;
-                    t1_cnt_r     <= 16'hFFFF;
+                    t1_cnt_r <= t1_cnt_r - 16'h0001;
                 end
-            end else begin
-                t1_cnt_r <= t1_cnt_r - 16'h0001;
-            end
 
-            // ---- Timer 2 (mode 0 only: timed interrupt) -------------------
-            if (t2_cnt_r == 16'h0000) begin
-                if (t2_running_r) begin
-                    ifr_r[5]     <= 1'b1;
-                    t2_running_r <= 1'b0;   // one-shot
+                // ---- Timer 2 (mode 0 only: timed interrupt) -------------------
+                if (t2_cnt_r == 16'h0000) begin
+                    if (t2_running_r) begin
+                        ifr_r[5]     <= 1'b1;
+                        t2_running_r <= 1'b0;   // one-shot
+                    end
+                    t2_cnt_r <= 16'hFFFF;
+                end else begin
+                    t2_cnt_r <= t2_cnt_r - 16'h0001;
                 end
-                t2_cnt_r <= 16'hFFFF;
-            end else begin
-                t2_cnt_r <= t2_cnt_r - 16'h0001;
             end
 
             // ---- Auto-set IFR bits from CA/CB edges -----------------------
