@@ -9,7 +9,9 @@ hardware.
 |---|---|---|
 | `vera2fill.s` | `VERA2FILL.PRG` | Switch to 8bpp, fill the whole screen fast with the **blit** (doubling a 16-colour seed), wait for a key, return to BASIC. |
 | `vera2incr.s` | `VERA2INCR.PRG` | The **auto-increment stride** (`$9F64[7:4]`): vertical lines drawn with stride **+640**, and a rectangle outline drawn by walking the perimeter with `+1`, `+640`, `-1`, `-640` from a single pointer load. Self-tests the stride first and says so if your build predates it. |
-| `vera2blit.s` | `VERA2BLIT.PRG` | 8bpp gradient + 16 random **VERA sprites** + the **mouse** over it (passthru); **left-click** the gradient drops a message box (band saved to scratch via the blit), **click the box** to restore it exactly. |
+| `vera2demo.s` | `VERA2DEMO.PRG` | Auto-cycles between an 8bpp 256-colour diagonal gradient and 4bpp 16-colour bands. |
+| `vera2sprites.s` | `VERA2SPRITES.PRG` | 8bpp gradient + random **VERA sprites** + the **mouse** composited over it (passthru), full-screen. |
+| `vera2blit.s` | `VERA2BLIT.PRG` | Everything above plus **save-under**: **left-click** the gradient drops a message box (band saved to scratch via the blit), **click the box** to restore it exactly. |
 
 > ⚠️ **These `.PRG`s need a bitstream/emulator with the auto-increment stride**
 > (`$9F64` = `{incr[3:0], ptr[19:16]}`). On an older build `VERA2INCR` prints a
@@ -17,8 +19,9 @@ hardware.
 > default `+1` stride. See the breaking-change note in
 > [`../vera_2.md`](../vera_2.md).
 
-`vera2demo.cfg` is the cc65 linker config both use (a minimal `$0801` PRG with a
-BASIC `SYS` stub).
+`vera2demo.cfg` is the cc65 linker config all five use (a minimal `$0801` PRG
+with a BASIC `SYS` stub). `vera2_demos.img` is a ready-to-mount SD image holding
+every `.PRG` above — point the core's SD mount at it and `LOAD` them by name.
 
 ## Build
 
@@ -34,6 +37,8 @@ ld65 -C vera2demo.cfg vera2incr.o -o VERA2INCR.PRG
 ca65 --cpu 65C02 vera2blit.s -o vera2blit.o
 ld65 -C vera2demo.cfg vera2blit.o -o VERA2BLIT.PRG
 ```
+
+(same pattern for `vera2demo` and `vera2sprites`)
 
 ## Run
 
