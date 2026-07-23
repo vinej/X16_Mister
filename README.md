@@ -4,6 +4,15 @@ Note: 128M SDRAM module is needed for the X16 core.
 
 ## version 1.3 :
 
+**Serial / network card — dual UART + ROMTERM fixes.** The serial/network card
+now exposes **two independent UART windows** at `$9FE0` and `$9FE8` (previously
+both were aliased to a single UART). A new OSD **MiSTer UART** selector maps
+MiSTer's one host UART to a single guest port (`$9FE0` or `$9FE8`) at a time, and
+the active-low RTS/DTR handshake is corrected so **ROMTERM** works with its
+default RTS/CTS on the first port selection. PS/2 keyboard events are also now
+queued, so modifier/key bursts are no longer dropped while earlier bytes are
+being serialized. *(Contributed by jnngill.)*
+
 **EXPERIMENTAL — "VERA2" bitmap layer.** An optional SDRAM-backed **640×480
 4bpp / 8bpp** linear bitmap layer — the high-resolution mode VERA advertises but
 its 128 KB of VRAM can't hold — mapped at `$9F60`–`$9F6F` and composited over
